@@ -13,10 +13,9 @@ Tested on various flavors of Linux like Ubuntu, Fedora, CentOS, and RHEL, includ
 
 # Why iSCSI targets
 iSCSI is a network protocol that allows you to image drives soldered into a motherboard, working servers that can't be shut down, or devices that you have a legal warrant to access but can't seize.
-To expose a physical or logical drive via iSCSI on a network, you need to set up an iSCSI target correctly.
-Use Cases:
-- Mount forensic images over iSCSI
-- Disaster Recovery: create target drives for data recovery
+To expose a physical or logical drive via iSCSI on a network, you need to set up an iSCSI target correctly. Typical use cases are:
+- acquire a remote forensic images;
+- replicated an image to multiple computers over a network.
 
 # Requisites
 Linux only. Python 3.6+ must be installed. 
