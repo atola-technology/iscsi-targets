@@ -13,10 +13,12 @@ Tested on various flavors of Linux like Ubuntu, Fedora, CentOS, and RHEL, includ
 
 # Why iSCSI targets
 iSCSI is a network protocol that allows to access a physical or logical devices. To expose a physical or logical drive via iSCSI on a network, you need to set up an iSCSI target correctly. 
+
 Typical DFIR use cases have to do with image acquisition of:
-- drives soldered into a motherboard or the ones that can't be seized
-- running servers that can't be shut down
-Another enterprise use case is to replicate an image to multiple computers over a network.
+- Drives soldered into a motherboard or the ones that can't be seized.
+- Running servers that can't be shut down.
+
+Another enterprise use case is a replication of an image to multiple computers over a network.
 
 # Requisites
 Linux only. Python 3.6+ must be installed. 
