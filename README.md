@@ -36,4 +36,4 @@ Create a single iSCSI target for specified /dev/sdb1 partition.
 `sudo python3 iscsi-targets.py /dev/sdb1`
 
 ## Creators
-[Atola Technology](https://atola.com) - makers of high-performance forensic hardware imagers.
+[Atola Technology](https://atola.com) - makers of high-performance forensic imagers.
