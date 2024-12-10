@@ -41,15 +41,24 @@ def install_targetcli():
         run_command("apt-get install python3-rtslib-fb -y")
         run_command("apt-get install targetcli-fb -y")
 
+def check_iscsi_port_free():
+    if run_command(f"lsof -i :3260 || true") != "":
+        print("Port 3260 is already in use. Please make sure that the port is free before running this script.")
+        exit(1)
 
 def get_boot_device():
-    mount_info = run_command("lsblk | grep /boot || true")
+    mount_info = run_command("lsblk | grep -E '^.* /boot' || true")
     if mount_info == "":
         # if lsblk does not show /boot, then it is a live CD
         mount_info = run_command("lsblk | grep /cdrom || true")
-    boot_device = re.search(r'(sd[a-z]+)', mount_info)
-    return "/dev/" + boot_device.group(1) if boot_device else None
+        if mount_info == "":
+            mount_info = run_command("lsblk | grep -E '^.* /$' || true")
 
+    boot_device = re.search(r'(sd[a-z]+)|(nvme[0-9])', mount_info)
+    if boot_device is None:
+        return None
+
+    return "/dev/" + next(group for group in boot_device.groups() if group is not None)
 
 def is_disk(device):
     short_name = get_block_short_name(device)
@@ -65,10 +74,17 @@ def is_disk(device):
 
 def get_drives():
     drives = run_command("lsblk | grep disk | awk '{{print $1}}'").split("\n")
+    sizes = run_command("lsblk | grep disk | awk '{{print $4}}'").split("\n")
     drives = list(filter(str.strip, drives))
     for i in range(len(drives)):
         drives[i] = "/dev/" + drives[i]
-    return drives
+
+    drives_with_size = []
+    for drive, size in zip(drives, sizes):
+        if size != "0B":
+            drives_with_size.append(drive)
+
+    return drives_with_size
 
 
 def check_if_used_in_iscsi(drive):
@@ -155,6 +171,8 @@ def main(device):
         print("This script needs to be run with root privileges.")
         return
 
+    check_iscsi_port_free()
+
     # Check if targetcli is installed
     if not os.path.exists("/usr/bin/targetcli"):
         install = input("targetcli is not installed. Do you want to install it? (Y/N): ")
@@ -165,11 +183,15 @@ def main(device):
 
     # Check if firewall is enabled
     if os.path.exists("/usr/bin/apt-firewall-cmd") or os.path.exists("/usr/bin/firewall-cmd"):
-        if "running" in run_command("firewall-cmd --state"):
+        if "running" in run_command("firewall-cmd --state || true"):
             # Open port 3260 for iSCSI traffic
             run_command("firewall-cmd --permanent --add-port=3260/tcp")
             # Reload firewall to apply changes
             run_command("firewall-cmd --reload")
+    elif "ufw" in run_command("dpkg -l | grep ufw || true"):
+        if "active" in run_command("ufw status || true"):
+            # Open port 3260 for iSCSI traffic
+            run_command("ufw allow 3260/tcp")
 
     boot_device = get_boot_device()
     if not boot_device:
