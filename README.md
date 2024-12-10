@@ -6,7 +6,7 @@ Automatically create iSCSI targets for all drives except for a boot device.
 - When you add such an iSCSI target in [Atola imagers](https://atola.com/products/) as a source drive, it will pull the drive model and serial number from IQN into a case.
 - You can specify a block device as an argument to create an iSCSI target for it.
 
-Tested on various flavors of Linux like Ubuntu, Fedora, CentOS, and RHEL, including DFIR boot images:
+Tested on various flavors of Linux like Ubuntu, Fedora, Rocky, CentOS, and RHEL, including DFIR boot images:
 - Paladin
 - Caine
 - Tsurugi
