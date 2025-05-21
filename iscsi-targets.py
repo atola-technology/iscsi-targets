@@ -54,7 +54,7 @@ def get_boot_device():
         if mount_info == "":
             mount_info = run_command("lsblk | grep -E '^.* /$' || true")
 
-    boot_device = re.search(r'(sd[a-z]+)|(nvme[0-9])', mount_info)
+    boot_device = re.search(r'(sd[a-z]+)|(nvme[0-9])|(mmcblk[0-9]+p[0-9]+)', mount_info)
     if boot_device is None:
         return None
 
