@@ -29,6 +29,13 @@ def run_command(command):
         exit(1)
     return result.stdout.decode('utf-8')
 
+def run_command_with_color(command):
+    result = subprocess.run(command, shell=True)
+    if result.returncode != 0:
+        print(f"Error executing command '{command}'")
+        exit(1)
+    return result.returncode
+
 
 def install_targetcli():
     if os.path.exists("usr/bin/dnf"):
@@ -54,7 +61,7 @@ def get_boot_device():
         if mount_info == "":
             mount_info = run_command("lsblk | grep -E '^.* /$' || true")
 
-    boot_device = re.search(r'(sd[a-z]+)|(nvme[0-9])|(mmcblk[0-9]+p[0-9]+)', mount_info)
+    boot_device = re.search(r'(sd[a-z]+)|(nvme[0-9])|(mmcblk[0-9]+)', mount_info)
     if boot_device is None:
         return None
 
@@ -81,10 +88,15 @@ def get_drives():
 
     drives_with_size = []
     for drive, size in zip(drives, sizes):
-        if size != "0B":
+        if size != "0B" and not is_emmc_service_area(drive):
             drives_with_size.append(drive)
 
     return drives_with_size
+
+
+def is_emmc_service_area(drive):
+    # eMMC exposes hardware boot partitions and RPMB as separate read-only disks
+    return re.search(r'mmcblk[0-9]+(boot[0-9]+|rpmb)$', drive) is not None
 
 
 def check_if_used_in_iscsi(drive):
@@ -96,23 +108,31 @@ def check_is_mounted(drive):
     volumes = run_command(f"mount | grep {drive} || true")
     return len(volumes) != 0
 
-
-def unmount_drive(drive):
-    if check_is_mounted(drive):
-        run_command(f"umount {drive}* || true")
-
-
 def get_block_short_name(drive):
     return drive.split("/")[-1]
 
 
 def get_drive_details(drive):
     drive_name = get_block_short_name(drive)
-    model = run_command(f"lsblk -o NAME,MODEL | grep {drive_name}").splitlines()[0].strip()
-    model = model[len(drive_name):-1].strip().replace(" ", "-").replace("_", "-")
-    serial = run_command(f"lsblk -o NAME,SERIAL | grep {drive_name}").splitlines()[0].strip()
-    serial = serial[len(drive_name):-1].strip()
+    model = run_command(f"lsblk -dn -o MODEL {drive}").strip().replace(" ", "-").replace("_", "-")
+    serial = run_command(f"lsblk -dn -o SERIAL {drive}").strip()
+
+    # lsblk shows no MODEL/SERIAL for eMMC, but sysfs has them
+    if not model:
+        model = read_sysfs_attribute(drive_name, "name").replace(" ", "-").replace("_", "-")
+    if not serial:
+        serial = read_sysfs_attribute(drive_name, "serial")
+    if not model:
+        model = drive_name
     return model, serial
+
+
+def read_sysfs_attribute(drive_name, attribute):
+    path = f"/sys/block/{drive_name}/device/{attribute}"
+    if not os.path.exists(path):
+        return ""
+    with open(path) as f:
+        return f.read().strip()
 
 
 def create_iscsi_target(drive, block, iqn):
@@ -121,12 +141,14 @@ def create_iscsi_target(drive, block, iqn):
         run_command(f"targetcli iscsi/{iqn}/tpg1/luns/ create {block}")
         run_command(f"targetcli iscsi/{iqn}/tpg1/ set attribute generate_node_acls=1")
         print(f"iSCSI target created for {drive} with IQN: {iqn}")
-        run_command(f"targetcli saveconfig")
+        # We don't save config. Keep the existing targets till reboot only.
+        # run_command(f"targetcli saveconfig")
 
 
 def create_block_for_disk(drive, model, serial):
     if not run_command(f"targetcli ls /backstores/block | grep {model} || true"):
-        run_command(f"targetcli backstores/block create name={model} dev={drive} wwn={serial}")
+        wwn = f" wwn={serial}" if serial else ""
+        run_command(f"targetcli backstores/block create name={model} dev={drive}{wwn}")
     return f"/backstores/block/{model}"
 
 
@@ -152,7 +174,14 @@ def create_iqn_for_partition(partition):
     return create_iqn(partition_name)
 
 
-def main(device):
+def output_iscsi_targets_info():
+    print("\n" + "="*21)
+    print("Current iSCSI targets")
+    print("="*21)
+    run_command_with_color("targetcli ls /iscsi")    
+    
+
+def main(device, auto_confirm=False):
     # Check python3 is installed
     if not os.path.exists("/usr/bin/python3"):
         print(
@@ -166,7 +195,6 @@ def main(device):
     if device is not None:
         is_disk(device)
 
-    # Check if the script is run with root privileges
     if os.geteuid() != 0:
         print("This script needs to be run with root privileges.")
         return
@@ -175,28 +203,30 @@ def main(device):
 
     # Check if targetcli is installed
     if not os.path.exists("/usr/bin/targetcli"):
-        install = input("targetcli is not installed. Do you want to install it? (Y/N): ")
-        if install.lower() == "y":
+        if auto_confirm:
+            print("targetcli is not installed. Installing automatically...")
             install_targetcli()
         else:
-            return
+            install = input("targetcli is not installed. Do you want to install it? (Y/N): ")
+            if install.lower() == "y":
+                install_targetcli()
+            else:
+                return
 
     # Check if firewall is enabled
     if os.path.exists("/usr/bin/apt-firewall-cmd") or os.path.exists("/usr/bin/firewall-cmd"):
         if "running" in run_command("firewall-cmd --state || true"):
-            # Open port 3260 for iSCSI traffic
             run_command("firewall-cmd --permanent --add-port=3260/tcp")
-            # Reload firewall to apply changes
             run_command("firewall-cmd --reload")
     elif "ufw" in run_command("dpkg -l | grep ufw || true"):
         if "active" in run_command("ufw status || true"):
-            # Open port 3260 for iSCSI traffic
             run_command("ufw allow 3260/tcp")
 
     boot_device = get_boot_device()
     if not boot_device:
         print("Unable to determine the boot device.")
         return
+    print("\n")
     print(f"Boot device: {boot_device}")
 
     if device == boot_device:
@@ -208,6 +238,8 @@ def main(device):
     else:
         drives = get_drives()
 
+    all_drives = drives.copy()
+
     for drive in drives:
         if check_if_used_in_iscsi(drive):
             drives.remove(drive)
@@ -216,39 +248,46 @@ def main(device):
         print("No block devices can be used for iSCSI target creation.")
         return
 
-    if len(drives) == 1 and drives[0] == boot_device:
+    if len(all_drives) == 1 and drives[0] == boot_device:
         print(f"Boot device {boot_device} is the only drive available and cannot be used for iSCSI target creation.")
         return
+    
+    if (len(drives) > 1):
+        drives = [drive for drive in drives if drive != boot_device]
 
-    drives = [drive for drive in drives if drive != boot_device]
-
-    if device is not None and not is_disk(device):
-        print(f"{device} file system will be unmounted and used for iSCSI target creation.")
-    else:
-        print("The following block devices will be unmounted and used for iSCSI target creation:")
-        for drive in drives:
-            model, serial = get_drive_details(drive)
-            print(drive + "\t" + model + "\t" + serial)
-
-    confirm = input("Do you want to continue? (Y/N): ")
-    if confirm.lower() != "y":
-        print("Operation cancelled.")
-        return
-
-    for drive in drives:
-        unmount_drive(drive)
-        if is_disk(drive):
-            model, serial = get_drive_details(drive)
-            block = create_block_for_disk(drive, model, serial)
-            iqn = create_iqn_for_disk(model, serial)
+        if device is not None and not is_disk(device):
+            print(f"{device} file system will be unmounted and used for iSCSI target creation.")
         else:
-            block = create_block_for_partition(drive)
-            iqn = create_iqn_for_partition(drive)
-        create_iscsi_target(drive, block, iqn)
+            print("The following block devices will be unmounted and used for iSCSI target creation:")
+            for drive in drives:
+                model, serial = get_drive_details(drive)
+                print(drive + "\t" + model + "\t" + serial)
+
+        if auto_confirm:
+            print("Auto-confirmation enabled. Proceeding with iSCSI target creation...")
+        else:
+            confirm = input("Do you want to continue? (Y/N): ")
+            if confirm.lower() != "y":
+                print("Operation cancelled.")
+                return
+
+        for drive in drives:
+            if is_disk(drive):
+                model, serial = get_drive_details(drive)
+                block = create_block_for_disk(drive, model, serial)
+                iqn = create_iqn_for_disk(model, serial)
+            else:
+                block = create_block_for_partition(drive)
+                iqn = create_iqn_for_partition(drive)
+            create_iscsi_target(drive, block, iqn)
+
+    output_iscsi_targets_info()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Creates iSCSI targets for block devices')
     parser.add_argument('device', nargs='?', help='Block device to expose as an iSCSI target. If not specified, all block devices except for the boot device will be used.')
+    parser.add_argument('-y', '--yes', action='store_true', help='Automatically confirm all prompts without user interaction')
     args = parser.parse_args()
-    main(args.device)
+
+    main(args.device, args.yes)
